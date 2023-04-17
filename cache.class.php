@@ -34,6 +34,8 @@ class Cache {
    */
   private $_extension = '.cache';
 
+  private $_lock;
+
   /**
    * Default constructor
    *
@@ -65,6 +67,18 @@ class Cache {
     }
   }
 
+
+  private function lockWrite() {
+    $this->_lock = fopen($this->getCacheDir() . ".lock", "w+");
+    return flock($this->_lock, LOCK_EX);
+  }
+
+  private function unlock()
+  {
+    flock($this->_lock, LOCK_UN);
+    fclose($this->_lock);
+  }
+
   /**
    * Store data in the cache
    *
@@ -79,14 +93,18 @@ class Cache {
       'expire' => $expiration,
       'data'   => serialize($data)
     );
-    $dataArray = $this->_loadCache();
-    if (true === is_array($dataArray)) {
-      $dataArray[$key] = $storeData;
-    } else {
-      $dataArray = array($key => $storeData);
+
+    if ($this->lockWrite()) {
+      $dataArray = $this->_loadCache();
+      if (true === is_array($dataArray)) {
+        $dataArray[$key] = $storeData;
+      } else {
+        $dataArray = array($key => $storeData);
+      }
+      $cacheData = json_encode($dataArray);
+      file_put_contents($this->getCacheDir(), $cacheData);
     }
-    $cacheData = json_encode($dataArray);
-    file_put_contents($this->getCacheDir(), $cacheData);
+    $this->unlock();
     return $this;
   }
 
@@ -132,16 +150,19 @@ class Cache {
    * @return object
    */
   public function erase($key) {
-    $cacheData = $this->_loadCache();
-    if (true === is_array($cacheData)) {
-      if (true === isset($cacheData[$key])) {
-        unset($cacheData[$key]);
-        $cacheData = json_encode($cacheData);
-        file_put_contents($this->getCacheDir(), $cacheData);
-      } else {
-        throw new Exception("Error: erase() - Key '{$key}' not found.");
+    if ($this->lockWrite()) {
+      $cacheData = $this->_loadCache();
+      if (true === is_array($cacheData)) {
+        if (true === isset($cacheData[$key])) {
+          unset($cacheData[$key]);
+          $cacheData = json_encode($cacheData);
+          file_put_contents($this->getCacheDir(), $cacheData);
+        } else {
+          throw new Exception("Error: erase() - Key '{$key}' not found.");
+        }
       }
     }
+    $this->unlock();
     return $this;
   }
 
@@ -151,21 +172,24 @@ class Cache {
    * @return integer
    */
   public function eraseExpired() {
-    $cacheData = $this->_loadCache();
-    if (true === is_array($cacheData)) {
-      $counter = 0;
-      foreach ($cacheData as $key => $entry) {
-        if (true === $this->_checkExpired($entry['time'], $entry['expire'])) {
-          unset($cacheData[$key]);
-          $counter++;
+    $counter = 0;
+    if ($this->lockWrite()) {
+      $cacheData = $this->_loadCache();
+      if (true === is_array($cacheData)) {
+        foreach ($cacheData as $key => $entry) {
+          if (true === $this->_checkExpired($entry['time'], $entry['expire'])) {
+            unset($cacheData[$key]);
+            $counter++;
+          }
+        }
+        if ($counter > 0) {
+          $cacheData = json_encode($cacheData);
+          file_put_contents($this->getCacheDir(), $cacheData);
         }
       }
-      if ($counter > 0) {
-        $cacheData = json_encode($cacheData);
-        file_put_contents($this->getCacheDir(), $cacheData);
-      }
-      return $counter;
     }
+    $this->unlock();
+    return $counter;
   }
 
   /**
@@ -174,11 +198,14 @@ class Cache {
    * @return object
    */
   public function eraseAll() {
-    $cacheDir = $this->getCacheDir();
-    if (true === file_exists($cacheDir)) {
-      $cacheFile = fopen($cacheDir, 'w');
-      fclose($cacheFile);
+    if ($this->lockWrite()) {
+      $cacheDir = $this->getCacheDir();
+      if (true === file_exists($cacheDir)) {
+        $cacheFile = fopen($cacheDir, 'w');
+        fclose($cacheFile);
+      }
     }
+    $this->unlock();
     return $this;
   }
 
